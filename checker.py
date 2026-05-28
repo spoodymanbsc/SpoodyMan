@@ -151,9 +151,16 @@ if os.path.exists(RESULTS_FILE):
 with sync_playwright() as p:
     browser = p.chromium.launch_persistent_context(
         user_data_dir=PROFILE_DIR,
+        channel="chrome",
         headless=False,
-        args=["--start-maximized"],
-        no_viewport=True
+        args=[
+            "--start-maximized",
+            "--disable-blink-features=AutomationControlled",
+            "--no-first-run",
+            "--no-default-browser-check",
+        ],
+        no_viewport=True,
+        ignore_default_args=["--enable-automation"],
     )
     page = browser.new_page()
 
