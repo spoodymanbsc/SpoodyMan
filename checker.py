@@ -1,11 +1,60 @@
 from playwright.sync_api import sync_playwright
-import time, csv, traceback, random, os
+import time, csv, traceback, random, os, json
 
 URL = "https://www.roblox.com/redeem"
 BASE = os.path.dirname(os.path.abspath(__file__))
-PROFILE_DIR = os.path.join(BASE, "bot-profile")
 CODES_FILE = os.path.join(BASE, "codes.txt")
 RESULTS_FILE = os.path.join(BASE, "results.csv")
+
+CHROME_USER_DATA = os.path.join(
+    os.environ.get("LOCALAPPDATA", ""),
+    "Google", "Chrome", "User Data"
+)
+
+
+def get_chrome_profiles():
+    """Находит все профили Chrome с их именами."""
+    profiles = []
+    local_state_path = os.path.join(CHROME_USER_DATA, "Local State")
+    if not os.path.exists(local_state_path):
+        return profiles
+    try:
+        with open(local_state_path, "r", encoding="utf-8") as f:
+            state = json.load(f)
+        info = state.get("profile", {}).get("info_cache", {})
+        for folder, data in info.items():
+            name = data.get("name", folder)
+            profiles.append((folder, name))
+    except:
+        pass
+    return profiles
+
+
+def pick_profile():
+    """Показывает список профилей и просит выбрать."""
+    profiles = get_chrome_profiles()
+    if not profiles:
+        print("Профили Chrome не найдены. Буду использовать отдельный профиль.")
+        return None, os.path.join(BASE, "bot-profile")
+
+    print("\nДоступные профили Chrome:")
+    for i, (folder, name) in enumerate(profiles, 1):
+        print(f"  {i}. {name}  ({folder})")
+    print(f"  0. Создать новый отдельный профиль")
+
+    while True:
+        try:
+            choice = input("\nВыбери номер профиля: ").strip()
+            idx = int(choice)
+            if idx == 0:
+                return None, os.path.join(BASE, "bot-profile")
+            if 1 <= idx <= len(profiles):
+                folder, name = profiles[idx - 1]
+                print(f"Выбран профиль: {name}")
+                return folder, CHROME_USER_DATA
+        except:
+            pass
+        print("Введи число из списка.")
 
 
 def read_codes():
@@ -40,20 +89,18 @@ def is_captcha(page):
 
 
 def wait_for_captcha_to_clear(page):
-    """Стоим и ждём пока капча не пройдёт. Обновляем страницу каждые 3-5 минут."""
     attempt = 0
     while True:
         if not is_captcha(page):
-            print("  ✅ Капча прошла, продолжаю...")
+            print("  Captcha cleared, continuing...")
             return
 
         attempt += 1
-        wait_sec = random.randint(180, 300)  # 3-5 минут
+        wait_sec = random.randint(180, 300)
         mins = wait_sec // 60
         secs = wait_sec % 60
-        print(f"  🔒 Капча! (попытка {attempt}) Жду {mins} мин {secs} сек...")
+        print(f"  Captcha! (attempt {attempt}) Waiting {mins}m {secs}s...")
 
-        # Отсчёт каждые 30 секунд чтобы было видно что скрипт живой
         elapsed = 0
         while elapsed < wait_sec:
             chunk = min(30, wait_sec - elapsed)
@@ -61,9 +108,9 @@ def wait_for_captcha_to_clear(page):
             elapsed += chunk
             remaining = wait_sec - elapsed
             if remaining > 0:
-                print(f"  ⏳ Осталось {remaining} сек...")
+                print(f"  {remaining}s remaining...")
 
-        print("  🔄 Обновляю страницу...")
+        print("  Refreshing page...")
         try:
             page.reload(wait_until="domcontentloaded", timeout=60000)
         except:
@@ -71,7 +118,6 @@ def wait_for_captcha_to_clear(page):
                 page.goto(URL, wait_until="domcontentloaded", timeout=60000)
             except:
                 pass
-
         time.sleep(random.uniform(4, 6))
 
 
@@ -84,21 +130,15 @@ def wait_ready(page):
 
 
 def process_code(page, code):
-    """Проверяет один код. Не уходит дальше пока капча не снята."""
-
-    # Переходим на страницу
     page.goto(URL, wait_until="domcontentloaded", timeout=60000)
     time.sleep(random.uniform(2, 4))
 
-    # Если сразу капча — ждём пока не пройдёт
     if is_captcha(page):
-        print("  🔒 Капча на загрузке страницы...")
+        print("  Captcha on page load...")
         wait_for_captcha_to_clear(page)
-        # После капчи заново загружаем страницу для чистого старта
         page.goto(URL, wait_until="domcontentloaded", timeout=60000)
         time.sleep(random.uniform(2, 4))
 
-    # Вводим код
     try:
         inp = page.get_by_label("Code")
     except:
@@ -108,30 +148,31 @@ def process_code(page, code):
     inp.fill(code)
     time.sleep(random.uniform(1, 2))
 
-    # Нажимаем Redeem
     try:
         page.get_by_role("button", name="Redeem").click(timeout=15000)
     except:
         page.locator("text=Redeem").first.click(timeout=15000)
 
-    # Ждём ответа
     wait_ready(page)
 
-    # Если после нажатия появилась капча — ждём пока не пройдёт и пробуем код снова
     if is_captcha(page):
-        print("  🔒 Капча после нажатия Redeem...")
+        print("  Captcha after Redeem click...")
         wait_for_captcha_to_clear(page)
-        # Пробуем этот же код заново
-        print("  🔁 Пробую код снова после капчи...")
+        print("  Retrying code after captcha...")
         return process_code(page, code)
 
     return page.inner_text("body")
 
 
-# ---- Старт / продолжение ----
+# ---- Выбор профиля ----
+print("\n=== Roblox Code Checker ===")
+print("ВАЖНО: Закрой Chrome перед запуском!\n")
+profile_folder, user_data_dir = pick_profile()
+
+# ---- Продолжение или заново ----
 checked = set()
 if os.path.exists(RESULTS_FILE):
-    ans = input("Продолжить с прошлого места? (да/нет): ").strip().lower()
+    ans = input("\nПродолжить с прошлого места? (да/нет): ").strip().lower()
     if ans in ("да", "д", "y", "yes"):
         try:
             with open(RESULTS_FILE, "r", encoding="utf-8-sig") as f:
@@ -140,32 +181,40 @@ if os.path.exists(RESULTS_FILE):
                 for row in reader:
                     if row:
                         checked.add(row[0])
-            print(f"Пропускаю уже проверенные: {len(checked)} кодов")
+            print(f"Skipping already checked: {len(checked)} codes")
         except:
             pass
     else:
         os.remove(RESULTS_FILE)
-        print("Начинаю заново.")
+        print("Starting fresh.")
 
-os.makedirs(PROFILE_DIR, exist_ok=True)
+os.makedirs(user_data_dir if profile_folder else user_data_dir, exist_ok=True)
+
+# ---- Запуск браузера ----
+launch_args = []
+if profile_folder:
+    launch_args.append(f"--profile-directory={profile_folder}")
 
 with sync_playwright() as p:
     browser = p.chromium.launch_persistent_context(
-        PROFILE_DIR, channel="chrome", headless=False
+        user_data_dir=user_data_dir,
+        channel="chrome",
+        headless=False,
+        args=launch_args
     )
     page = browser.new_page()
 
     try:
         codes = read_codes()
         remaining = [c for c in codes if c not in checked]
-        print(f"\nКодов всего: {len(codes)}, осталось проверить: {len(remaining)}")
+        print(f"\nTotal codes: {len(codes)}, remaining: {len(remaining)}")
 
         if not remaining:
-            input("Нет кодов для проверки! Нажми Enter...")
+            input("No codes to check! Press Enter...")
             browser.close()
             exit()
 
-        print("Открываю сайт...")
+        print("Opening site...")
         page.goto(URL, wait_until="domcontentloaded", timeout=60000)
         time.sleep(5)
 
@@ -179,7 +228,7 @@ with sync_playwright() as p:
                 writer.writerow(["code", "status", "result"])
 
             for i, code in enumerate(remaining, 1):
-                print(f"\n[{i}/{len(remaining)}] Проверяю: {code}")
+                print(f"\n[{i}/{len(remaining)}] {code}")
 
                 try:
                     result_text = process_code(page, code)
@@ -197,25 +246,24 @@ with sync_playwright() as p:
 
                     writer.writerow([code, status, result_text[:300]])
                     f.flush()
-                    print(f"  → {status}")
+                    print(f"  -> {status}")
                     time.sleep(random.uniform(2, 4))
 
                 except Exception as e:
                     writer.writerow([code, "ERROR", str(e)])
                     f.flush()
                     errors += 1
-                    print(f"  → ОШИБКА: {e}")
+                    print(f"  -> ERROR: {e}")
                     traceback.print_exc()
 
-        print(f"\n========== ГОТОВО ==========")
-        print(f"✅ Валидных:   {valid}")
-        print(f"❌ Невалидных: {invalid}")
-        print(f"⚠️  Ошибок:    {errors}")
-        print(f"Результаты:   {RESULTS_FILE}")
+        print(f"\n===== DONE =====")
+        print(f"Valid:   {valid}")
+        print(f"Invalid: {invalid}")
+        print(f"Errors:  {errors}")
+        print(f"Results: {RESULTS_FILE}")
 
     except Exception:
-        print("КРИТИЧЕСКАЯ ОШИБКА:")
         traceback.print_exc()
 
-    input("\nНажми Enter, чтобы закрыть браузер...")
+    input("\nPress Enter to close browser...")
     browser.close()
