@@ -1,5 +1,5 @@
 from playwright.sync_api import sync_playwright
-import time, csv, traceback, random, os
+import time, csv, traceback, random, os, json, sqlite3, shutil, tempfile
 
 URL = "https://www.roblox.com/redeem"
 BASE = os.path.dirname(os.path.abspath(__file__))
@@ -7,19 +7,128 @@ PROFILE_DIR = os.path.join(BASE, "bot-profile")
 CODES_FILE = os.path.join(BASE, "codes.txt")
 RESULTS_FILE = os.path.join(BASE, "results.csv")
 
+CHROME_USER_DATA = os.path.join(
+    os.environ.get("LOCALAPPDATA", ""),
+    "Google", "Chrome", "User Data"
+)
+
+
+def get_chrome_profiles():
+    profiles = []
+    local_state_path = os.path.join(CHROME_USER_DATA, "Local State")
+    if not os.path.exists(local_state_path):
+        return profiles
+    try:
+        with open(local_state_path, "r", encoding="utf-8") as f:
+            state = json.load(f)
+        info = state.get("profile", {}).get("info_cache", {})
+        for folder, data in info.items():
+            name = data.get("name", folder)
+            profiles.append((folder, name))
+    except:
+        pass
+    return profiles
+
+
+def pick_profile():
+    profiles = get_chrome_profiles()
+    if not profiles:
+        return None
+
+    print("\nИз какого профиля Chrome взять сессию Roblox?")
+    for i, (folder, name) in enumerate(profiles, 1):
+        print(f"  {i}. {name}")
+    print(f"  0. Войти вручную")
+
+    while True:
+        try:
+            choice = int(input("\nВыбери номер: ").strip())
+            if choice == 0:
+                return None
+            if 1 <= choice <= len(profiles):
+                folder, name = profiles[choice - 1]
+                print(f"Беру куки из профиля: {name}")
+                return folder
+        except:
+            pass
+        print("Введи число из списка.")
+
+
+def get_roblox_cookies(profile_folder):
+    """Извлекает куки Roblox из Chrome профиля."""
+    try:
+        import win32crypt
+        from Crypto.Cipher import AES
+        import base64
+
+        # Читаем ключ шифрования
+        local_state_path = os.path.join(CHROME_USER_DATA, "Local State")
+        with open(local_state_path, "r", encoding="utf-8") as f:
+            local_state = json.load(f)
+
+        encrypted_key = base64.b64decode(
+            local_state["os_crypt"]["encrypted_key"]
+        )
+        encrypted_key = encrypted_key[5:]  # убираем DPAPI префикс
+        key = win32crypt.CryptUnprotectData(encrypted_key, None, None, None, 0)[1]
+
+        # Копируем файл куки (Chrome блокирует прямой доступ)
+        cookies_path = os.path.join(CHROME_USER_DATA, profile_folder, "Network", "Cookies")
+        if not os.path.exists(cookies_path):
+            cookies_path = os.path.join(CHROME_USER_DATA, profile_folder, "Cookies")
+
+        tmp = tempfile.mktemp(suffix=".db")
+        shutil.copy2(cookies_path, tmp)
+
+        conn = sqlite3.connect(tmp)
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT name, encrypted_value, domain FROM cookies WHERE host_key LIKE '%roblox.com%'"
+        )
+
+        cookies = []
+        for name, enc_val, domain in cursor.fetchall():
+            try:
+                if enc_val[:3] == b'v10':
+                    nonce = enc_val[3:15]
+                    ciphertext = enc_val[15:-16]
+                    tag = enc_val[-16:]
+                    cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
+                    value = cipher.decrypt_and_verify(ciphertext, tag).decode("utf-8")
+                else:
+                    value = win32crypt.CryptUnprotectData(enc_val, None, None, None, 0)[1].decode("utf-8")
+
+                cookies.append({
+                    "name": name,
+                    "value": value,
+                    "domain": domain if domain.startswith(".") else "." + domain,
+                    "path": "/",
+                    "secure": True,
+                    "httpOnly": False,
+                    "sameSite": "None",
+                })
+            except:
+                pass
+
+        conn.close()
+        os.remove(tmp)
+        print(f"  Найдено {len(cookies)} куки Roblox")
+        return cookies
+
+    except ImportError:
+        print("  Устанавливаю нужные библиотеки...")
+        os.system("pip install pywin32 pycryptodome -q")
+        print("  Перезапусти скрипт.")
+        input("  Нажми Enter...")
+        exit()
+    except Exception as e:
+        print(f"  Не удалось прочитать куки: {e}")
+        return []
+
 
 def read_codes():
     with open(CODES_FILE, "r", encoding="utf-8") as f:
         return [line.strip() for line in f if line.strip()]
-
-
-def is_logged_in(page):
-    try:
-        page.goto("https://www.roblox.com/home", wait_until="domcontentloaded", timeout=30000)
-        time.sleep(3)
-        return "login" not in page.url.lower()
-    except:
-        return False
 
 
 def is_captcha(page):
@@ -35,7 +144,6 @@ def is_captcha(page):
             "just a moment" in all_text,
             "проверяем ваш браузер" in all_text,
             "начать задачу" in all_text,
-            "пожалуйста, выполните это задание" in all_text,
             "arkose" in all_text,
             "funcaptcha" in all_text,
             page.locator("iframe[src*='captcha']").count() > 0,
@@ -124,15 +232,21 @@ def process_code(page, code):
     return page.inner_text("body")
 
 
+# ---- Старт ----
 print("\n=== Roblox Code Checker ===\n")
+print("ВАЖНО: Закрой Chrome перед запуском!\n")
+
+profile_folder = pick_profile()
+chrome_cookies = []
+if profile_folder:
+    chrome_cookies = get_roblox_cookies(profile_folder)
 
 os.makedirs(PROFILE_DIR, exist_ok=True)
-first_login = not os.path.exists(os.path.join(PROFILE_DIR, "Default", "Cookies"))
 
 # ---- Продолжение или заново ----
 checked = set()
 if os.path.exists(RESULTS_FILE):
-    ans = input("Продолжить с прошлого места? (да/нет): ").strip().lower()
+    ans = input("\nПродолжить с прошлого места? (да/нет): ").strip().lower()
     if ans in ("да", "д", "y", "yes"):
         try:
             with open(RESULTS_FILE, "r", encoding="utf-8-sig") as f:
@@ -157,30 +271,39 @@ with sync_playwright() as p:
             "--disable-blink-features=AutomationControlled",
             "--no-sandbox",
             "--disable-setuid-sandbox",
-            "--disable-infobars",
-            "--disable-dev-shm-usage",
         ],
         no_viewport=True,
         ignore_default_args=["--enable-automation"],
     )
     page = browser.new_page()
-    # Скрываем что это автоматизированный браузер
     page.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined})")
 
-    # Первый запуск — просим залогиниться
-    if first_login or not is_logged_in(page):
-        print("\n" + "="*50)
-        print("  Войди в аккаунт Roblox в открытом браузере")
-        print("  После входа вернись сюда и нажми Enter")
-        print("="*50)
-        page.goto("https://www.roblox.com/login", wait_until="domcontentloaded", timeout=30000)
-        input("\n  Нажми Enter когда залогинишься: ")
-        print("  Отлично! Сессия сохранена, в следующий раз вход не нужен.\n")
+    # Загружаем куки из Chrome
+    if chrome_cookies:
+        try:
+            browser.add_cookies(chrome_cookies)
+            print(f"Куки загружены ({len(chrome_cookies)} шт)")
+        except Exception as e:
+            print(f"Ошибка загрузки куки: {e}")
+
+    # Проверяем вход
+    try:
+        page.goto("https://www.roblox.com/home", wait_until="domcontentloaded", timeout=30000)
+        time.sleep(3)
+        if "login" in page.url.lower():
+            print("\nНе удалось залогиниться через куки.")
+            print("Войди вручную в браузере, потом нажми Enter.")
+            input("Нажми Enter после входа: ")
+        else:
+            print("Залогинен успешно!")
+    except Exception as e:
+        print(f"Ошибка проверки входа: {e}")
+        input("Войди вручную и нажми Enter: ")
 
     try:
         codes = read_codes()
         remaining = [c for c in codes if c not in checked]
-        print(f"Total codes: {len(codes)}, remaining: {len(remaining)}")
+        print(f"\nTotal codes: {len(codes)}, remaining: {len(remaining)}")
 
         if not remaining:
             input("No codes to check! Press Enter...")
