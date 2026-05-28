@@ -1,65 +1,25 @@
 from playwright.sync_api import sync_playwright
-import time, csv, traceback, random, os, json
+import time, csv, traceback, random, os
 
 URL = "https://www.roblox.com/redeem"
 BASE = os.path.dirname(os.path.abspath(__file__))
+PROFILE_DIR = os.path.join(BASE, "bot-profile")
 CODES_FILE = os.path.join(BASE, "codes.txt")
 RESULTS_FILE = os.path.join(BASE, "results.csv")
-
-CHROME_USER_DATA = os.path.join(
-    os.environ.get("LOCALAPPDATA", ""),
-    "Google", "Chrome", "User Data"
-)
-
-
-def get_chrome_profiles():
-    """Находит все профили Chrome с их именами."""
-    profiles = []
-    local_state_path = os.path.join(CHROME_USER_DATA, "Local State")
-    if not os.path.exists(local_state_path):
-        return profiles
-    try:
-        with open(local_state_path, "r", encoding="utf-8") as f:
-            state = json.load(f)
-        info = state.get("profile", {}).get("info_cache", {})
-        for folder, data in info.items():
-            name = data.get("name", folder)
-            profiles.append((folder, name))
-    except:
-        pass
-    return profiles
-
-
-def pick_profile():
-    """Показывает список профилей и просит выбрать."""
-    profiles = get_chrome_profiles()
-    if not profiles:
-        print("Профили Chrome не найдены. Буду использовать отдельный профиль.")
-        return None, os.path.join(BASE, "bot-profile")
-
-    print("\nДоступные профили Chrome:")
-    for i, (folder, name) in enumerate(profiles, 1):
-        print(f"  {i}. {name}  ({folder})")
-    print(f"  0. Создать новый отдельный профиль")
-
-    while True:
-        try:
-            choice = input("\nВыбери номер профиля: ").strip()
-            idx = int(choice)
-            if idx == 0:
-                return None, os.path.join(BASE, "bot-profile")
-            if 1 <= idx <= len(profiles):
-                folder, name = profiles[idx - 1]
-                print(f"Выбран профиль: {name}")
-                return folder, CHROME_USER_DATA
-        except:
-            pass
-        print("Введи число из списка.")
 
 
 def read_codes():
     with open(CODES_FILE, "r", encoding="utf-8") as f:
         return [line.strip() for line in f if line.strip()]
+
+
+def is_logged_in(page):
+    try:
+        page.goto("https://www.roblox.com/home", wait_until="domcontentloaded", timeout=30000)
+        time.sleep(3)
+        return "login" not in page.url.lower()
+    except:
+        return False
 
 
 def is_captcha(page):
@@ -164,15 +124,15 @@ def process_code(page, code):
     return page.inner_text("body")
 
 
-# ---- Выбор профиля ----
-print("\n=== Roblox Code Checker ===")
-print("ВАЖНО: Закрой Chrome перед запуском!\n")
-profile_folder, user_data_dir = pick_profile()
+print("\n=== Roblox Code Checker ===\n")
+
+os.makedirs(PROFILE_DIR, exist_ok=True)
+first_login = not os.path.exists(os.path.join(PROFILE_DIR, "Default", "Cookies"))
 
 # ---- Продолжение или заново ----
 checked = set()
 if os.path.exists(RESULTS_FILE):
-    ans = input("\nПродолжить с прошлого места? (да/нет): ").strip().lower()
+    ans = input("Продолжить с прошлого места? (да/нет): ").strip().lower()
     if ans in ("да", "д", "y", "yes"):
         try:
             with open(RESULTS_FILE, "r", encoding="utf-8-sig") as f:
@@ -188,33 +148,36 @@ if os.path.exists(RESULTS_FILE):
         os.remove(RESULTS_FILE)
         print("Starting fresh.")
 
-os.makedirs(user_data_dir if profile_folder else user_data_dir, exist_ok=True)
-
-# ---- Запуск браузера ----
-launch_args = []
-if profile_folder:
-    launch_args.append(f"--profile-directory={profile_folder}")
-
 with sync_playwright() as p:
     browser = p.chromium.launch_persistent_context(
-        user_data_dir=user_data_dir,
-        channel="chrome",
+        user_data_dir=PROFILE_DIR,
         headless=False,
-        args=launch_args
+        args=["--start-maximized"],
+        no_viewport=True
     )
     page = browser.new_page()
+
+    # Первый запуск — просим залогиниться
+    if first_login or not is_logged_in(page):
+        print("\n" + "="*50)
+        print("  Войди в аккаунт Roblox в открытом браузере")
+        print("  После входа вернись сюда и нажми Enter")
+        print("="*50)
+        page.goto("https://www.roblox.com/login", wait_until="domcontentloaded", timeout=30000)
+        input("\n  Нажми Enter когда залогинишься: ")
+        print("  Отлично! Сессия сохранена, в следующий раз вход не нужен.\n")
 
     try:
         codes = read_codes()
         remaining = [c for c in codes if c not in checked]
-        print(f"\nTotal codes: {len(codes)}, remaining: {len(remaining)}")
+        print(f"Total codes: {len(codes)}, remaining: {len(remaining)}")
 
         if not remaining:
             input("No codes to check! Press Enter...")
             browser.close()
             exit()
 
-        print("Opening site...")
+        print("Opening redeem page...")
         page.goto(URL, wait_until="domcontentloaded", timeout=60000)
         time.sleep(5)
 
