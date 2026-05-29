@@ -116,8 +116,9 @@ def get_roblox_cookies(profile_folder):
         return cookies
 
     except ImportError:
+        import sys
         print("  Устанавливаю нужные библиотеки...")
-        os.system("pip install pywin32 pycryptodome -q")
+        os.system(f'"{sys.executable}" -m pip install pywin32 pycryptodome -q')
         print("  Перезапусти скрипт.")
         input("  Нажми Enter...")
         exit()
