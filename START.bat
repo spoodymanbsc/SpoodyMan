@@ -23,15 +23,12 @@ if errorlevel 1 (
     echo  Python OK
 )
 
-:: Install Playwright
-echo  [2/3] Installing Playwright...
-python -m pip install playwright -q >nul 2>&1
-echo  Playwright OK
+:: Install libraries
+echo  [2/3] Installing libraries...
+python -m pip install selenium -q >nul 2>&1
+echo  Libraries OK
 
-:: Install browser
-echo  [3/3] Setting up browser...
-python -m playwright install chromium >nul 2>&1
-echo  Browser OK
+echo  [3/3] OK
 
 echo.
 
