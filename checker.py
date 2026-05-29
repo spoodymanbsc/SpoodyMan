@@ -44,29 +44,41 @@ def wait_captcha(page):
     print("  Капча прошла!")
 
 
+def is_temp_error(text):
+    t = text.lower()
+    return "unexpected error" in t or "try again later" in t or "try your request again" in t
+
+
 def process_code(page, code):
-    page.goto(URL, wait_until="domcontentloaded", timeout=60000)
-    time.sleep(random.uniform(3, 5))
-    if is_captcha(page):
-        wait_captcha(page)
+    while True:
         page.goto(URL, wait_until="domcontentloaded", timeout=60000)
-        time.sleep(3)
-    try: inp = page.get_by_label("Code")
-    except: inp = page.locator("input").first
-    inp.fill("")
-    inp.fill(code)
-    time.sleep(random.uniform(1, 2))
-    try: page.get_by_role("button", name="Redeem").click(timeout=10000)
-    except:
-        try: page.locator("button:has-text('Redeem')").first.click(timeout=10000)
+        time.sleep(random.uniform(3, 5))
+        if is_captcha(page):
+            wait_captcha(page)
+            page.goto(URL, wait_until="domcontentloaded", timeout=60000)
+            time.sleep(3)
+        try: inp = page.get_by_label("Code")
+        except: inp = page.locator("input").first
+        inp.fill("")
+        inp.fill(code)
+        time.sleep(random.uniform(1, 2))
+        try: page.get_by_role("button", name="Redeem").click(timeout=10000)
+        except:
+            try: page.locator("button:has-text('Redeem')").first.click(timeout=10000)
+            except: pass
+        try: page.wait_for_load_state("networkidle", timeout=15000)
         except: pass
-    try: page.wait_for_load_state("networkidle", timeout=15000)
-    except: pass
-    time.sleep(random.uniform(6, 9))
-    if is_captcha(page):
-        wait_captcha(page)
-        return process_code(page, code)
-    return page.inner_text("body")
+        time.sleep(random.uniform(6, 9))
+        if is_captcha(page):
+            wait_captcha(page)
+            continue
+        result = page.inner_text("body")
+        if is_temp_error(result):
+            wait_sec = random.randint(60, 120)
+            print(f"  Ошибка сервера, жду {wait_sec}с и пробую снова...")
+            time.sleep(wait_sec)
+            continue
+        return result
 
 
 print("\n=== Roblox Code Checker ===\n")
