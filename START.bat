@@ -50,12 +50,6 @@ if not exist "%FOLDER%checker.py" (
     exit
 )
 
-:: Kill Chrome so profile is not locked
-echo  Closing Chrome...
-taskkill /F /IM chrome.exe >nul 2>&1
-taskkill /F /IM msedge.exe >nul 2>&1
-timeout /t 2 >nul
-
 echo  Starting checker...
 echo.
 python "%FOLDER%checker.py"
