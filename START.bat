@@ -25,7 +25,7 @@ if errorlevel 1 (
 
 :: Install libraries
 echo  [2/3] Installing libraries...
-python -m pip install undetected-chromedriver selenium -q >nul 2>&1
+python -m pip install setuptools undetected-chromedriver selenium -q >nul 2>&1
 echo  Libraries OK
 
 echo  [3/3] OK
