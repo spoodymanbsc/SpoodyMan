@@ -157,6 +157,13 @@ with sync_playwright() as p:
                     writer.writerow([code, status, result_text[:300]])
                     f.flush()
                     print(f"  -> {status}")
+
+                    # Удаляем из codes.txt только если получен чёткий ответ
+                    if status in ("VALID", "INVALID"):
+                        all_codes = read_codes()
+                        with open(CODES_FILE, "w", encoding="utf-8") as cf:
+                            cf.write("\n".join(c for c in all_codes if c != code))
+
                     time.sleep(random.uniform(2, 4))
                 except Exception as e:
                     writer.writerow([code, "ERROR", str(e)])
