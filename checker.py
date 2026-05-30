@@ -158,8 +158,8 @@ with sync_playwright() as p:
                     f.flush()
                     print(f"  -> {status}")
 
-                    # Удаляем из codes.txt только если получен чёткий ответ
-                    if status in ("VALID", "INVALID"):
+                    # Удаляем из codes.txt только если VALID (активирован на аккаунте)
+                    if status == "VALID":
                         all_codes = read_codes()
                         with open(CODES_FILE, "w", encoding="utf-8") as cf:
                             cf.write("\n".join(c for c in all_codes if c != code))
